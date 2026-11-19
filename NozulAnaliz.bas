@@ -200,7 +200,7 @@ Public Sub MarkaKarsilastirmaRaporu()
 
     ' ---- Rapor dosyasý ----
     Dim wbR As Workbook, ws As Worksheet, wsD As Worksheet
-    Dim aS As Variant, bS As Variant, aD As Variant, bD As Variant
+    Dim ortSA As Variant, ortSB As Variant, ortDA As Variant, ortDB As Variant
     Dim r0 As Long, rSeb As Long, rSon As Long
     Dim pA As Double, pB As Double
 
@@ -226,15 +226,15 @@ Public Sub MarkaKarsilastirmaRaporu()
     ws.Cells(r, 1).Resize(1, 5).Value = Array("Gösterge", mA, mB, "Fark (B - A)", "Fark % (B, A'ya göre)")
     BaslikBicim ws.Cells(r, 1).Resize(1, 5)
 
-    aS = Ort(sumS(1), nS(1)): bS = Ort(sumS(2), nS(2))
-    aD = Ort(sumD(1), nD(1)): bD = Ort(sumD(2), nD(2))
+    ortSA = Ort(sumS(1), nS(1)): ortSB = Ort(sumS(2), nS(2))
+    ortDA = Ort(sumD(1), nD(1)): ortDB = Ort(sumD(2), nD(2))
 
     r = r + 1
     SatirYaz ws, r, "Deðiþim adedi", adet(1), adet(2), "0", "+0;-0;0"
     r = r + 1
-    SatirYaz ws, r, "Ortalama aldýðý süre", aS, bS, "[h]:mm:ss", "SAAT"
+    SatirYaz ws, r, "Ortalama aldýðý süre", ortSA, ortSB, "[h]:mm:ss", "SAAT"
     r = r + 1
-    SatirYaz ws, r, "Ortalama aldýðý döküm sayýsý", aD, bD, "0.00", "+0.00;-0.00;0"
+    SatirYaz ws, r, "Ortalama aldýðý döküm sayýsý", ortDA, ortDB, "0.00", "+0.00;-0.00;0"
     r = r + 1
     SatirYaz ws, r, "Toplam döküm sayýsý", sumD(1), sumD(2), "0.0", "+0.0;-0.0;0"
     r = r + 1
@@ -277,8 +277,8 @@ Public Sub MarkaKarsilastirmaRaporu()
     ws.Cells(r, 1).Value = "TOPLAM"
     ws.Cells(r, 2).Value = adet(1): ws.Cells(r, 3).Value = 1
     ws.Cells(r, 4).Value = adet(2): ws.Cells(r, 5).Value = 1
-    ws.Cells(r, 7).Value = aS: ws.Cells(r, 8).Value = bS
-    ws.Cells(r, 9).Value = aD: ws.Cells(r, 10).Value = bD
+    ws.Cells(r, 7).Value = ortSA: ws.Cells(r, 8).Value = ortSB
+    ws.Cells(r, 9).Value = ortDA: ws.Cells(r, 10).Value = ortDB
     ws.Range(ws.Cells(r, 1), ws.Cells(r, 10)).Font.Bold = True
     ws.Range(ws.Cells(r, 1), ws.Cells(r, 10)).Interior.Color = RGB(242, 242, 242)
 
@@ -303,9 +303,9 @@ Public Sub MarkaKarsilastirmaRaporu()
     ws.Cells(r, 1).Value = "3) DEÐERLENDÝRME"
     ws.Cells(r, 1).Font.Bold = True: ws.Cells(r, 1).Font.Size = 12
     r = r + 1
-    ws.Cells(r, 1).Value = "• Ortalama aldýðý süre: " & YorumYuzde(mB, mA, aS, bS, "daha uzun", "daha kýsa")
+    ws.Cells(r, 1).Value = "• Ortalama aldýðý süre: " & YorumYuzde(mB, mA, ortSA, ortSB, "daha uzun", "daha kýsa")
     r = r + 1
-    ws.Cells(r, 1).Value = "• Ortalama döküm sayýsý: " & YorumYuzde(mB, mA, aD, bD, "daha fazla", "daha az")
+    ws.Cells(r, 1).Value = "• Ortalama döküm sayýsý: " & YorumYuzde(mB, mA, ortDA, ortDB, "daha fazla", "daha az")
     r = r + 1
     ws.Cells(r, 1).Value = "• Talimat gereði (planlý) deðiþim oraný:  A %" & Format(talA * 100, "0.0") & _
                            "  -  B %" & Format(talB * 100, "0.0")
