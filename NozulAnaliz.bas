@@ -1,0 +1,684 @@
+Attribute VB_Name = "NozulAnaliz"
+'=====================================================================
+'  NOZUL ANALÝZ MAKROLARI
+'  1) NozulPivotOlustur        : Marka + Deðiþim Sebebi filtreli pivot
+'                                (Ort. Aldýðý Süre, Ort. Döküm Sayýsý, Adet)
+'  2) MarkaKarsilastirmaRaporu : Ýki markayý yeni bir Excel dosyasýnda
+'                                yüzdelik olarak karþýlaþtýrýr
+'  Makrolarý NOZUL 2026 sayfasý açýkken çalýþtýrýn.
+'=====================================================================
+Option Explicit
+
+'==================== AYARLAR ====================
+Private Const MARKA_A_VARSAYILAN As String = "VESUVÝUS DENEME BZ 49741"
+Private Const MARKA_B_VARSAYILAN As String = "IFGL DENEME"
+' True : sadece "Deðiþim Sebebi" girilmiþ (deðiþimi tamamlanmýþ) satýrlar alýnýr
+' False: Marka dolu olan tüm satýrlar alýnýr (hâlâ kullanýmdaki nozullar dahil)
+Private Const SADECE_DEGISENLER As Boolean = True
+'=================================================
+
+Private mWb As Workbook
+Private mN As Long
+Private mMarka() As String
+Private mSebep() As String
+Private mSure() As Double
+Private mSureOK() As Boolean
+Private mDokum() As Double
+Private mDokumOK() As Boolean
+
+'=====================================================================
+'  1) PIVOT
+'=====================================================================
+Public Sub NozulPivotOlustur()
+    Dim wsV As Worksheet, wsP As Worksheet
+    Dim pc As PivotCache, pt As PivotTable, df As PivotField
+    Dim outArr() As Variant, i As Long
+
+    If Not VeriYukle() Then Exit Sub
+
+    On Error GoTo Hata
+    Application.ScreenUpdating = False
+
+    Set wsV = SayfaHazirla(mWb, "PivotVeri")
+    Set wsP = SayfaHazirla(mWb, "NozulPivot")
+
+    ReDim outArr(1 To mN + 1, 1 To 4)
+    outArr(1, 1) = "Marka"
+    outArr(1, 2) = "Deðiþim Sebebi"
+    outArr(1, 3) = "Aldýðý Süre"
+    outArr(1, 4) = "Aldýðý Döküm Sayýsý"
+    For i = 1 To mN
+        outArr(i + 1, 1) = mMarka(i)
+        outArr(i + 1, 2) = IIf(mSebep(i) = "", "(Boþ)", mSebep(i))
+        If mSureOK(i) Then outArr(i + 1, 3) = mSure(i) Else outArr(i + 1, 3) = Empty
+        If mDokumOK(i) Then outArr(i + 1, 4) = mDokum(i) Else outArr(i + 1, 4) = Empty
+    Next i
+    wsV.Range("A1").Resize(mN + 1, 4).Value = outArr
+    wsV.Range("C2").Resize(mN, 1).NumberFormat = "[h]:mm:ss"
+    wsV.Columns("A:D").AutoFit
+
+    Set pc = mWb.PivotCaches.Create(SourceType:=xlDatabase, _
+                                    SourceData:=wsV.Range("A1").Resize(mN + 1, 4))
+    Set pt = pc.CreatePivotTable(TableDestination:=wsP.Range("A8"), TableName:="NozulPivot")
+
+    With pt
+        .ManualUpdate = True
+        With .PivotFields("Marka")
+            .Orientation = xlPageField
+            .EnableMultiplePageItems = True
+        End With
+        With .PivotFields("Deðiþim Sebebi")
+            .Orientation = xlPageField
+            .EnableMultiplePageItems = True
+        End With
+
+        Set df = .AddDataField(.PivotFields("Aldýðý Süre"), "Ort. Aldýðý Süre", xlAverage)
+        df.NumberFormat = "[h]:mm:ss"
+        Set df = .AddDataField(.PivotFields("Aldýðý Döküm Sayýsý"), "Ort. Aldýðý Döküm Sayýsý", xlAverage)
+        df.NumberFormat = "0.00"
+        Set df = .AddDataField(.PivotFields("Aldýðý Döküm Sayýsý"), "Toplam Döküm Sayýsý", xlSum)
+        df.NumberFormat = "0.0"
+        Set df = .AddDataField(.PivotFields("Marka"), "Deðiþim Adedi", xlCount)
+        df.NumberFormat = "0"
+
+        .DataPivotField.Orientation = xlColumnField
+        .RowAxisLayout xlTabularRow
+        .ManualUpdate = False
+    End With
+
+    With wsP
+        .Range("A1").Value = "NOZUL PÝVOT"
+        .Range("A1").Font.Bold = True
+        .Range("A1").Font.Size = 14
+        .Range("A2").Value = "Üstteki 'Marka' ve 'Deðiþim Sebebi' filtrelerinden seçim yapýn (çoklu seçim açýk)."
+        .Range("A2").Font.Italic = True
+        .Columns("A:F").ColumnWidth = 26
+    End With
+
+    wsV.Visible = xlSheetHidden
+    wsP.Activate
+    Application.ScreenUpdating = True
+    MsgBox "Pivot oluþturuldu (" & mN & " kayýt)." & vbCrLf & _
+           "Veri deðiþince makroyu tekrar çalýþtýrmanýz yeterli.", vbInformation
+    Exit Sub
+Hata:
+    Application.ScreenUpdating = True
+    MsgBox "Pivot oluþturulurken hata: " & Err.Description, vbCritical
+End Sub
+
+'=====================================================================
+'  2) ÝKÝ MARKA KARÞILAÞTIRMA RAPORU (yeni Excel dosyasý)
+'=====================================================================
+Public Sub MarkaKarsilastirmaRaporu()
+    Dim dMarka As Object, dSeb As Object
+    Dim i As Long, b As Long, si As Long, r As Long, nSeb As Long
+    Dim k As String, g As String
+    Dim mA As String, mB As String, kA As String, kB As String
+    Dim v As Variant, std As Variant
+
+    Dim adet(1 To 2) As Long
+    Dim nS(1 To 2) As Long, sumS(1 To 2) As Double, maxS(1 To 2) As Double, minS(1 To 2) As Double
+    Dim nD(1 To 2) As Long, sumD(1 To 2) As Double, maxD(1 To 2) As Double, minD(1 To 2) As Double
+    Dim sebAd() As String, sAdet() As Long
+    Dim sSumS() As Double, sNS() As Long, sSumD() As Double, sND() As Long
+
+    If Not VeriYukle() Then Exit Sub
+
+    ' ---- Marka seçimi ----
+    Set dMarka = CreateObject("Scripting.Dictionary")
+    For i = 1 To mN
+        k = Norm(mMarka(i))
+        If Not dMarka.Exists(k) Then dMarka.Add k, mMarka(i)
+    Next i
+    mA = MarkaSec(dMarka, "1. (referans) marka", MARKA_A_VARSAYILAN)
+    If mA = "" Then Exit Sub
+    mB = MarkaSec(dMarka, "2. (karþýlaþtýrýlacak) marka", MARKA_B_VARSAYILAN)
+    If mB = "" Then Exit Sub
+    kA = Norm(mA): kB = Norm(mB)
+    If kA = kB Then
+        MsgBox "Ýki farklý marka seçmelisiniz.", vbExclamation
+        Exit Sub
+    End If
+
+    ' ---- Sebep gruplarý (bu 4'ü veride olmasa da raporda görünür) ----
+    ReDim sebAd(1 To mN + 10)
+    ReDim sAdet(1 To mN + 10, 1 To 2)
+    ReDim sSumS(1 To mN + 10, 1 To 2): ReDim sNS(1 To mN + 10, 1 To 2)
+    ReDim sSumD(1 To mN + 10, 1 To 2): ReDim sND(1 To mN + 10, 1 To 2)
+    Set dSeb = CreateObject("Scripting.Dictionary")
+    std = Array("Talimat", "Týkanma", "Alttan kesme", "Boðazdan kopma")
+    For Each v In std
+        nSeb = nSeb + 1
+        dSeb.Add Norm(CStr(v)), nSeb
+        sebAd(nSeb) = CStr(v)
+    Next v
+
+    For b = 1 To 2
+        minS(b) = 1E+99: minD(b) = 1E+99
+    Next b
+
+    ' ---- Hesaplama ----
+    For i = 1 To mN
+        k = Norm(mMarka(i))
+        b = 0
+        If k = kA Then
+            b = 1
+        ElseIf k = kB Then
+            b = 2
+        End If
+        If b > 0 Then
+            adet(b) = adet(b) + 1
+            g = SebepGrubu(mSebep(i))
+            If Not dSeb.Exists(Norm(g)) Then
+                nSeb = nSeb + 1
+                dSeb.Add Norm(g), nSeb
+                sebAd(nSeb) = g
+            End If
+            si = dSeb.Item(Norm(g))
+            sAdet(si, b) = sAdet(si, b) + 1
+
+            If mSureOK(i) Then
+                nS(b) = nS(b) + 1: sumS(b) = sumS(b) + mSure(i)
+                If mSure(i) > maxS(b) Then maxS(b) = mSure(i)
+                If mSure(i) < minS(b) Then minS(b) = mSure(i)
+                sNS(si, b) = sNS(si, b) + 1: sSumS(si, b) = sSumS(si, b) + mSure(i)
+            End If
+            If mDokumOK(i) Then
+                nD(b) = nD(b) + 1: sumD(b) = sumD(b) + mDokum(i)
+                If mDokum(i) > maxD(b) Then maxD(b) = mDokum(i)
+                If mDokum(i) < minD(b) Then minD(b) = mDokum(i)
+                sND(si, b) = sND(si, b) + 1: sSumD(si, b) = sSumD(si, b) + mDokum(i)
+            End If
+        End If
+    Next i
+
+    If adet(1) = 0 Or adet(2) = 0 Then
+        MsgBox "Seçilen markalardan birine ait kayýt yok." & vbCrLf & _
+               mA & ": " & adet(1) & vbCrLf & mB & ": " & adet(2), vbExclamation
+        Exit Sub
+    End If
+
+    ' ---- Rapor dosyasý ----
+    Dim wbR As Workbook, ws As Worksheet, wsD As Worksheet
+    Dim aS As Variant, bS As Variant, aD As Variant, bD As Variant
+    Dim r0 As Long, rSeb As Long, rSon As Long
+    Dim pA As Double, pB As Double
+
+    On Error GoTo Hata
+    Application.ScreenUpdating = False
+    Set wbR = Workbooks.Add(xlWBATWorksheet)
+    Set ws = wbR.Worksheets(1)
+    ws.Name = "Karþýlaþtýrma"
+    ActiveWindow.DisplayGridlines = False
+
+    ws.Range("A1").Value = "NOZUL PERFORMANS KARÞILAÞTIRMASI"
+    ws.Range("A1").Font.Size = 16: ws.Range("A1").Font.Bold = True
+    ws.Range("A2").Value = "A (referans): " & mA & "     B: " & mB
+    ws.Range("A3").Value = "Kaynak: " & mWb.Name & "   |   Oluþturma: " & Format(Now, "dd.mm.yyyy hh:nn") & _
+                           IIf(SADECE_DEGISENLER, "   |   Sadece deðiþim sebebi girilmiþ kayýtlar", "")
+    ws.Range("A2:A3").Font.Color = RGB(89, 89, 89)
+
+    ' ---- Bölüm 1: Genel performans ----
+    r = 5
+    ws.Cells(r, 1).Value = "1) GENEL PERFORMANS"
+    ws.Cells(r, 1).Font.Bold = True: ws.Cells(r, 1).Font.Size = 12
+    r = r + 1: r0 = r
+    ws.Cells(r, 1).Resize(1, 5).Value = Array("Gösterge", mA, mB, "Fark (B - A)", "Fark % (B, A'ya göre)")
+    BaslikBicim ws.Cells(r, 1).Resize(1, 5)
+
+    aS = Ort(sumS(1), nS(1)): bS = Ort(sumS(2), nS(2))
+    aD = Ort(sumD(1), nD(1)): bD = Ort(sumD(2), nD(2))
+
+    r = r + 1
+    SatirYaz ws, r, "Deðiþim adedi", adet(1), adet(2), "0", "+0;-0;0"
+    r = r + 1
+    SatirYaz ws, r, "Ortalama aldýðý süre", aS, bS, "[h]:mm:ss", "SAAT"
+    r = r + 1
+    SatirYaz ws, r, "Ortalama aldýðý döküm sayýsý", aD, bD, "0.00", "+0.00;-0.00;0"
+    r = r + 1
+    SatirYaz ws, r, "Toplam döküm sayýsý", sumD(1), sumD(2), "0.0", "+0.0;-0.0;0"
+    r = r + 1
+    SatirYaz ws, r, "En uzun süre", IIf(nS(1) > 0, maxS(1), "-"), IIf(nS(2) > 0, maxS(2), "-"), "[h]:mm:ss", "SAAT"
+    r = r + 1
+    SatirYaz ws, r, "En kýsa süre", IIf(nS(1) > 0, minS(1), "-"), IIf(nS(2) > 0, minS(2), "-"), "[h]:mm:ss", "SAAT"
+    r = r + 1
+    SatirYaz ws, r, "En fazla döküm", IIf(nD(1) > 0, maxD(1), "-"), IIf(nD(2) > 0, maxD(2), "-"), "0.0", "+0.0;-0.0;0"
+    r = r + 1
+    SatirYaz ws, r, "En az döküm", IIf(nD(1) > 0, minD(1), "-"), IIf(nD(2) > 0, minD(2), "-"), "0.0", "+0.0;-0.0;0"
+    TabloCerceve ws.Range(ws.Cells(r0, 1), ws.Cells(r, 5))
+
+    ' ---- Bölüm 2: Deðiþim sebebi yüzdeleri ----
+    r = r + 2
+    ws.Cells(r, 1).Value = "2) DEÐÝÞÝM SEBEBÝ DAÐILIMI (%)"
+    ws.Cells(r, 1).Font.Bold = True: ws.Cells(r, 1).Font.Size = 12
+    r = r + 1: rSeb = r
+    ws.Cells(r, 1).Resize(1, 10).Value = Array("Deðiþim Sebebi", _
+        "A Adet", "A %", "B Adet", "B %", "Fark (B - A) puan", _
+        "A Ort. Süre", "B Ort. Süre", "A Ort. Döküm", "B Ort. Döküm")
+    BaslikBicim ws.Cells(r, 1).Resize(1, 10)
+
+    For si = 1 To nSeb
+        r = r + 1
+        pA = sAdet(si, 1) / adet(1)
+        pB = sAdet(si, 2) / adet(2)
+        ws.Cells(r, 1).Value = sebAd(si)
+        ws.Cells(r, 2).Value = sAdet(si, 1)
+        ws.Cells(r, 3).Value = pA
+        ws.Cells(r, 4).Value = sAdet(si, 2)
+        ws.Cells(r, 5).Value = pB
+        ws.Cells(r, 6).Value = (pB - pA) * 100
+        ws.Cells(r, 7).Value = Ort(sSumS(si, 1), sNS(si, 1))
+        ws.Cells(r, 8).Value = Ort(sSumS(si, 2), sNS(si, 2))
+        ws.Cells(r, 9).Value = Ort(sSumD(si, 1), sND(si, 1))
+        ws.Cells(r, 10).Value = Ort(sSumD(si, 2), sND(si, 2))
+    Next si
+    rSon = r
+    r = r + 1
+    ws.Cells(r, 1).Value = "TOPLAM"
+    ws.Cells(r, 2).Value = adet(1): ws.Cells(r, 3).Value = 1
+    ws.Cells(r, 4).Value = adet(2): ws.Cells(r, 5).Value = 1
+    ws.Cells(r, 7).Value = aS: ws.Cells(r, 8).Value = bS
+    ws.Cells(r, 9).Value = aD: ws.Cells(r, 10).Value = bD
+    ws.Range(ws.Cells(r, 1), ws.Cells(r, 10)).Font.Bold = True
+    ws.Range(ws.Cells(r, 1), ws.Cells(r, 10)).Interior.Color = RGB(242, 242, 242)
+
+    ws.Range(ws.Cells(rSeb + 1, 3), ws.Cells(r, 3)).NumberFormat = "0.0%"
+    ws.Range(ws.Cells(rSeb + 1, 5), ws.Cells(r, 5)).NumberFormat = "0.0%"
+    ws.Range(ws.Cells(rSeb + 1, 6), ws.Cells(r, 6)).NumberFormat = "+0.0"" puan"";-0.0"" puan"";0"
+    ws.Range(ws.Cells(rSeb + 1, 7), ws.Cells(r, 8)).NumberFormat = "[h]:mm:ss"
+    ws.Range(ws.Cells(rSeb + 1, 9), ws.Cells(r, 10)).NumberFormat = "0.00"
+    ws.Range(ws.Cells(rSeb + 1, 2), ws.Cells(r, 10)).HorizontalAlignment = xlCenter
+    TabloCerceve ws.Range(ws.Cells(rSeb, 1), ws.Cells(r, 10))
+
+    ' ---- Bölüm 3: Deðerlendirme ----
+    Dim talA As Double, talB As Double, arzA As Double, arzB As Double
+    talA = SebepYuzde(dSeb, sAdet, "Talimat", 1, adet(1))
+    talB = SebepYuzde(dSeb, sAdet, "Talimat", 2, adet(2))
+    arzA = SebepYuzde(dSeb, sAdet, "Týkanma", 1, adet(1)) + SebepYuzde(dSeb, sAdet, "Alttan kesme", 1, adet(1)) _
+         + SebepYuzde(dSeb, sAdet, "Boðazdan kopma", 1, adet(1))
+    arzB = SebepYuzde(dSeb, sAdet, "Týkanma", 2, adet(2)) + SebepYuzde(dSeb, sAdet, "Alttan kesme", 2, adet(2)) _
+         + SebepYuzde(dSeb, sAdet, "Boðazdan kopma", 2, adet(2))
+
+    r = r + 2
+    ws.Cells(r, 1).Value = "3) DEÐERLENDÝRME"
+    ws.Cells(r, 1).Font.Bold = True: ws.Cells(r, 1).Font.Size = 12
+    r = r + 1
+    ws.Cells(r, 1).Value = "• Ortalama aldýðý süre: " & YorumYuzde(mB, mA, aS, bS, "daha uzun", "daha kýsa")
+    r = r + 1
+    ws.Cells(r, 1).Value = "• Ortalama döküm sayýsý: " & YorumYuzde(mB, mA, aD, bD, "daha fazla", "daha az")
+    r = r + 1
+    ws.Cells(r, 1).Value = "• Talimat gereði (planlý) deðiþim oraný:  A %" & Format(talA * 100, "0.0") & _
+                           "  -  B %" & Format(talB * 100, "0.0")
+    r = r + 1
+    ws.Cells(r, 1).Value = "• Arýza kaynaklý deðiþim (Týkanma + Alttan kesme + Boðazdan kopma):  A %" & _
+                           Format(arzA * 100, "0.0") & "  -  B %" & Format(arzB * 100, "0.0")
+
+    ' ---- Grafik ----
+    Dim co As ChartObject, sr As Series
+    Set co = ws.ChartObjects.Add(Left:=ws.Cells(5, 12).Left, Top:=ws.Cells(5, 12).Top, Width:=520, Height:=300)
+    With co.Chart
+        .ChartType = xlColumnClustered
+        Do While .SeriesCollection.Count > 0
+            .SeriesCollection(1).Delete
+        Loop
+        Set sr = .SeriesCollection.NewSeries
+        sr.Name = mA
+        sr.Values = ws.Range(ws.Cells(rSeb + 1, 3), ws.Cells(rSon, 3))
+        sr.XValues = ws.Range(ws.Cells(rSeb + 1, 1), ws.Cells(rSon, 1))
+        sr.Format.Fill.ForeColor.RGB = RGB(31, 78, 121)
+        Set sr = .SeriesCollection.NewSeries
+        sr.Name = mB
+        sr.Values = ws.Range(ws.Cells(rSeb + 1, 5), ws.Cells(rSon, 5))
+        sr.XValues = ws.Range(ws.Cells(rSeb + 1, 1), ws.Cells(rSon, 1))
+        sr.Format.Fill.ForeColor.RGB = RGB(237, 125, 49)
+        .HasTitle = True
+        .ChartTitle.Text = "Deðiþim Sebebi Daðýlýmý (%)"
+        .HasLegend = True
+        .Legend.Position = xlLegendPositionBottom
+        .Axes(xlValue).TickLabels.NumberFormat = "0%"
+        .SeriesCollection(1).HasDataLabels = True
+        .SeriesCollection(1).DataLabels.NumberFormat = "0%"
+        .SeriesCollection(2).HasDataLabels = True
+        .SeriesCollection(2).DataLabels.NumberFormat = "0%"
+    End With
+
+    ws.Columns("A").ColumnWidth = 32
+    ws.Columns("B:J").ColumnWidth = 15
+    ws.Range(ws.Cells(r0, 2), ws.Cells(r0, 5)).WrapText = True
+    ws.Rows(r0).RowHeight = 32
+
+    ' ---- Detay sayfasý ----
+    Set wsD = wbR.Worksheets.Add(After:=ws)
+    wsD.Name = "Detay"
+    Dim det() As Variant, n As Long
+    ReDim det(1 To adet(1) + adet(2) + 1, 1 To 5)
+    det(1, 1) = "Marka": det(1, 2) = "Deðiþim Sebebi": det(1, 3) = "Sebep Grubu"
+    det(1, 4) = "Aldýðý Süre": det(1, 5) = "Aldýðý Döküm Sayýsý"
+    n = 1
+    For i = 1 To mN
+        k = Norm(mMarka(i))
+        If k = kA Or k = kB Then
+            n = n + 1
+            det(n, 1) = mMarka(i)
+            det(n, 2) = mSebep(i)
+            det(n, 3) = SebepGrubu(mSebep(i))
+            If mSureOK(i) Then det(n, 4) = mSure(i)
+            If mDokumOK(i) Then det(n, 5) = mDokum(i)
+        End If
+    Next i
+    wsD.Range("A1").Resize(n, 5).Value = det
+    wsD.Range("D2").Resize(n - 1, 1).NumberFormat = "[h]:mm:ss"
+    BaslikBicim wsD.Range("A1:E1")
+    wsD.Range("A1").Resize(n, 5).AutoFilter
+    wsD.Columns("A:E").AutoFit
+
+    ws.Activate
+    ws.Range("A1").Select
+    Application.ScreenUpdating = True
+    MsgBox "Karþýlaþtýrma raporu yeni bir Excel dosyasýnda oluþturuldu." & vbCrLf & _
+           "Kaydetmeyi unutmayýn (Dosya > Farklý Kaydet).", vbInformation
+    Exit Sub
+Hata:
+    Application.ScreenUpdating = True
+    MsgBox "Rapor oluþturulurken hata: " & Err.Description, vbCritical
+End Sub
+
+'=====================================================================
+'  YARDIMCI FONKSÝYONLAR
+'=====================================================================
+Private Function VeriYukle() As Boolean
+    Dim lo As ListObject
+    Dim hdr As Variant, dat As Variant
+    Dim cM As Long, cS As Long, cSure As Long, cDok As Long
+    Dim r As Long, nR As Long
+    Dim mk As String, sb As String, eksik As String
+
+    Set lo = TabloBul()
+    If lo Is Nothing Then
+        MsgBox "'Marka' ve 'Aldýðý Süre' sütunlarýný içeren tablo bulunamadý." & vbCrLf & _
+               "NOZUL 2026 sayfasýný açýp makroyu tekrar çalýþtýrýn.", vbExclamation
+        Exit Function
+    End If
+    If lo.DataBodyRange Is Nothing Then
+        MsgBox "Tablo boþ.", vbExclamation
+        Exit Function
+    End If
+
+    Set mWb = lo.Parent.Parent
+    hdr = lo.HeaderRowRange.Value2
+    dat = lo.DataBodyRange.Value2
+
+    cM = KolonBul(hdr, "MARKA")
+    cS = KolonBul(hdr, "DEGISIMSEBEBI")
+    cSure = KolonBul(hdr, "ALDIGISURE")
+    cDok = KolonBul(hdr, "ALDIGIDOKUMSAYISI")
+    If cM = 0 Then eksik = eksik & "Marka, "
+    If cS = 0 Then eksik = eksik & "Deðiþim Sebebi, "
+    If cSure = 0 Then eksik = eksik & "Aldýðý Süre, "
+    If cDok = 0 Then eksik = eksik & "Aldýðý Döküm Sayýsý, "
+    If eksik <> "" Then
+        MsgBox "Þu sütun(lar) bulunamadý: " & Left$(eksik, Len(eksik) - 2), vbExclamation
+        Exit Function
+    End If
+
+    nR = UBound(dat, 1)
+    ReDim mMarka(1 To nR): ReDim mSebep(1 To nR)
+    ReDim mSure(1 To nR): ReDim mSureOK(1 To nR)
+    ReDim mDokum(1 To nR): ReDim mDokumOK(1 To nR)
+    mN = 0
+    For r = 1 To nR
+        mk = Temiz(dat(r, cM))
+        sb = Temiz(dat(r, cS))
+        If mk <> "" Then
+            If (Not SADECE_DEGISENLER) Or sb <> "" Then
+                mN = mN + 1
+                mMarka(mN) = mk
+                mSebep(mN) = sb
+                mSure(mN) = SureCevir(dat(r, cSure), mSureOK(mN))
+                mDokum(mN) = SayiCevir(dat(r, cDok), mDokumOK(mN))
+            End If
+        End If
+    Next r
+
+    If mN = 0 Then
+        MsgBox "Uygun veri satýrý bulunamadý.", vbExclamation
+        Exit Function
+    End If
+    VeriYukle = True
+End Function
+
+Private Function TabloBul() As ListObject
+    Dim ws As Worksheet, lo As ListObject
+    On Error Resume Next
+    For Each lo In ActiveSheet.ListObjects
+        If TabloUygun(lo) Then Set TabloBul = lo: Exit Function
+    Next lo
+    For Each ws In ActiveWorkbook.Worksheets
+        For Each lo In ws.ListObjects
+            If TabloUygun(lo) Then Set TabloBul = lo: Exit Function
+        Next lo
+    Next ws
+End Function
+
+Private Function TabloUygun(lo As ListObject) As Boolean
+    Dim hdr As Variant
+    hdr = lo.HeaderRowRange.Value2
+    TabloUygun = (KolonBul(hdr, "MARKA") > 0 And KolonBul(hdr, "ALDIGISURE") > 0)
+End Function
+
+Private Function KolonBul(hdr As Variant, anahtar As String) As Long
+    Dim j As Long
+    For j = LBound(hdr, 2) To UBound(hdr, 2)
+        If Norm(hdr(1, j)) = anahtar Then KolonBul = j: Exit Function
+    Next j
+    For j = LBound(hdr, 2) To UBound(hdr, 2)
+        If InStr(1, Norm(hdr(1, j)), anahtar, vbBinaryCompare) > 0 Then KolonBul = j: Exit Function
+    Next j
+End Function
+
+' Türkçe karakter, boþluk ve satýr sonlarýný temizleyip büyük harfe çevirir
+Private Function Norm(ByVal v As Variant) As String
+    Dim s As String
+    If IsError(v) Then Exit Function
+    s = UCase$(CStr(v))
+    s = Replace(s, vbCr, ""): s = Replace(s, vbLf, "")
+    s = Replace(s, " ", ""): s = Replace(s, Chr(160), "")
+    s = Replace(s, ChrW(775), "")                                  ' birleþik nokta
+    s = Replace(s, ChrW(304), "I"): s = Replace(s, ChrW(305), "I") ' Ý ý
+    s = Replace(s, ChrW(286), "G"): s = Replace(s, ChrW(287), "G") ' Ð ð
+    s = Replace(s, ChrW(220), "U"): s = Replace(s, ChrW(252), "U") ' Ü ü
+    s = Replace(s, ChrW(350), "S"): s = Replace(s, ChrW(351), "S") ' Þ þ
+    s = Replace(s, ChrW(214), "O"): s = Replace(s, ChrW(246), "O") ' Ö ö
+    s = Replace(s, ChrW(199), "C"): s = Replace(s, ChrW(231), "C") ' Ç ç
+    s = Replace(s, "i", "I")
+    Norm = s
+End Function
+
+Private Function Temiz(ByVal v As Variant) As String
+    If IsError(v) Or IsEmpty(v) Then Exit Function
+    Temiz = Trim$(Replace(CStr(v), Chr(160), " "))
+End Function
+
+' Süre: sayý (Excel saat deðeri) veya "03:43:00" gibi metin olabilir
+Private Function SureCevir(ByVal v As Variant, ByRef ok As Boolean) As Double
+    Dim s As String, p As Variant, h As Double, m As Double, sn As Double, d As Double
+    ok = False
+    If IsError(v) Or IsEmpty(v) Then Exit Function
+    If VarType(v) = vbString Then
+        s = Trim$(v)
+        If s = "" Then Exit Function
+        p = Split(s, ":")
+        If UBound(p) < 1 Then Exit Function
+        h = Val(p(0)): m = Val(p(1))
+        If UBound(p) >= 2 Then sn = Val(Replace(p(2), ",", "."))
+        d = (h + m / 60 + sn / 3600) / 24
+    ElseIf IsNumeric(v) Then
+        d = CDbl(v)
+    Else
+        Exit Function
+    End If
+    ok = (d > 0)
+    SureCevir = d
+End Function
+
+' Döküm sayýsý: sayý veya "1,5" gibi metin olabilir
+Private Function SayiCevir(ByVal v As Variant, ByRef ok As Boolean) As Double
+    Dim s As String, d As Double
+    ok = False
+    If IsError(v) Or IsEmpty(v) Then Exit Function
+    If VarType(v) = vbString Then
+        s = Trim$(Replace(v, ",", "."))
+        If s = "" Then Exit Function
+        If Not (s Like "*#*") Then Exit Function
+        d = Val(s)
+    ElseIf IsNumeric(v) Then
+        d = CDbl(v)
+    Else
+        Exit Function
+    End If
+    ok = (d >= 0)
+    SayiCevir = d
+End Function
+
+' Yazým farklýlýklarýný tek grupta toplar
+Private Function SebepGrubu(ByVal s As String) As String
+    Dim k As String
+    k = Norm(s)
+    If k = "" Then
+        SebepGrubu = "(Boþ)"
+    ElseIf InStr(k, "TALIMAT") > 0 Then
+        SebepGrubu = "Talimat"
+    ElseIf InStr(k, "TIKAN") > 0 Then
+        SebepGrubu = "Týkanma"
+    ElseIf InStr(k, "ALTTAN") > 0 Then
+        SebepGrubu = "Alttan kesme"
+    ElseIf InStr(k, "BOGAZ") > 0 Then
+        SebepGrubu = "Boðazdan kopma"
+    ElseIf InStr(k, "TANDIS") > 0 Then
+        SebepGrubu = "Tandiþ kaydýrma"
+    ElseIf InStr(k, "ARAVER") > 0 Then
+        SebepGrubu = "Ara verildi"
+    Else
+        SebepGrubu = s
+    End If
+End Function
+
+Private Function SebepYuzde(dSeb As Object, sAdet() As Long, ad As String, b As Long, toplam As Long) As Double
+    Dim k As String
+    k = Norm(ad)
+    If toplam = 0 Then Exit Function
+    If dSeb.Exists(k) Then SebepYuzde = sAdet(dSeb.Item(k), b) / toplam
+End Function
+
+Private Function MarkaSec(d As Object, baslik As String, varsayilan As String) As String
+    Dim keys As Variant, i As Long, liste As String, defIdx As Long
+    Dim cevap As String, kv As String
+    keys = d.keys
+    kv = Norm(varsayilan)
+    For i = 0 To d.Count - 1
+        liste = liste & (i + 1) & " - " & d.Item(keys(i)) & vbCrLf
+        If defIdx = 0 And keys(i) = kv Then defIdx = i + 1
+    Next i
+    If defIdx = 0 Then
+        For i = 0 To d.Count - 1
+            If InStr(keys(i), kv) > 0 Or InStr(kv, keys(i)) > 0 Then defIdx = i + 1: Exit For
+        Next i
+    End If
+    cevap = InputBox(baslik & " numarasýný yazýn:" & vbCrLf & vbCrLf & liste, _
+                     "Marka Seçimi", IIf(defIdx > 0, CStr(defIdx), ""))
+    cevap = Trim$(cevap)
+    If cevap = "" Then Exit Function
+    If IsNumeric(cevap) Then
+        i = CLng(cevap)
+        If i >= 1 And i <= d.Count Then MarkaSec = d.Item(keys(i - 1)): Exit Function
+    End If
+    If d.Exists(Norm(cevap)) Then MarkaSec = d.Item(Norm(cevap)): Exit Function
+    MsgBox "Geçersiz seçim: " & cevap, vbExclamation
+End Function
+
+Private Function Ort(ByVal toplam As Double, ByVal n As Long) As Variant
+    If n = 0 Then Ort = "-" Else Ort = toplam / n
+End Function
+
+Private Function YorumYuzde(ByVal mB As String, ByVal mA As String, ByVal a As Variant, ByVal b As Variant, _
+                            artiMetin As String, eksiMetin As String) As String
+    Dim f As Double
+    If Not IsNumeric(a) Or Not IsNumeric(b) Then YorumYuzde = "hesaplanamadý (veri yok)": Exit Function
+    If a = 0 Then YorumYuzde = "hesaplanamadý": Exit Function
+    f = (b - a) / a
+    If Abs(f) < 0.0005 Then
+        YorumYuzde = mB & " ile " & mA & " ayný seviyede."
+    ElseIf f > 0 Then
+        YorumYuzde = mB & ", " & mA & "'a göre %" & Format(f * 100, "0.0") & " " & artiMetin & "."
+    Else
+        YorumYuzde = mB & ", " & mA & "'a göre %" & Format(-f * 100, "0.0") & " " & eksiMetin & "."
+    End If
+End Function
+
+' Genel performans tablosuna bir satýr yazar
+Private Sub SatirYaz(ws As Worksheet, ByVal r As Long, ByVal ad As String, ByVal a As Variant, ByVal b As Variant, _
+                     ByVal fmt As String, ByVal farkFmt As String)
+    ws.Cells(r, 1).Value = ad
+    ws.Cells(r, 2).Value = a
+    ws.Cells(r, 3).Value = b
+    ws.Range(ws.Cells(r, 2), ws.Cells(r, 3)).NumberFormat = fmt
+    If IsNumeric(a) And IsNumeric(b) Then
+        If farkFmt = "SAAT" Then
+            ws.Cells(r, 4).Value = (b - a) * 24          ' fark saat cinsinden
+            ws.Cells(r, 4).NumberFormat = "+0.00"" saat"";-0.00"" saat"";0"
+        Else
+            ws.Cells(r, 4).Value = b - a
+            ws.Cells(r, 4).NumberFormat = farkFmt
+        End If
+        If a <> 0 Then
+            ws.Cells(r, 5).Value = (b - a) / a
+            ws.Cells(r, 5).NumberFormat = "+0.0%;-0.0%;0.0%"
+            If (b - a) > 0 Then
+                ws.Cells(r, 5).Font.Color = RGB(0, 128, 0)
+            ElseIf (b - a) < 0 Then
+                ws.Cells(r, 5).Font.Color = RGB(192, 0, 0)
+            End If
+        Else
+            ws.Cells(r, 5).Value = "-"
+        End If
+    Else
+        ws.Cells(r, 4).Value = "-"
+        ws.Cells(r, 5).Value = "-"
+    End If
+    ws.Range(ws.Cells(r, 2), ws.Cells(r, 5)).HorizontalAlignment = xlCenter
+End Sub
+
+Private Sub BaslikBicim(rng As Range)
+    With rng
+        .Font.Bold = True
+        .Font.Color = RGB(255, 255, 255)
+        .Interior.Color = RGB(31, 56, 100)
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .WrapText = True
+    End With
+End Sub
+
+Private Sub TabloCerceve(rng As Range)
+    With rng.Borders
+        .LineStyle = xlContinuous
+        .Weight = xlThin
+        .Color = RGB(191, 191, 191)
+    End With
+End Sub
+
+Private Function SayfaHazirla(wb As Workbook, ad As String) As Worksheet
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = wb.Worksheets(ad)
+    On Error GoTo 0
+    If Not ws Is Nothing Then
+        Application.DisplayAlerts = False
+        ws.Visible = xlSheetVisible
+        ws.Delete
+        Application.DisplayAlerts = True
+    End If
+    Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    ws.Name = ad
+    Set SayfaHazirla = ws
+End Function
