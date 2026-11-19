@@ -25,7 +25,7 @@ Public Sub TekMarkaPerformans()
     Dim dMarka As Object, i As Long, k As String, marka As String
     Dim wsV As Worksheet, wsP As Worksheet
     Dim pc As PivotCache, pt As PivotTable, df As PivotField
-    Dim outArr() As Variant
+    Dim outArr() As Variant, pi As PivotItem
 
     If Not VeriYukle() Then Exit Sub
 
@@ -42,28 +42,30 @@ Public Sub TekMarkaPerformans()
     Set wsV = SayfaHazirla(mWb, "PerfVeri")
     Set wsP = SayfaHazirla(mWb, "MarkaPerformans")
 
-    ReDim outArr(1 To mN + 1, 1 To 4)
+    ReDim outArr(1 To mN + 1, 1 To 5)
     outArr(1, 1) = "Marka"
     outArr(1, 2) = "Deðiþim Sebebi"
     outArr(1, 3) = "Aldýðý Süre"
     outArr(1, 4) = "Aldýðý Döküm Sayýsý"
+    outArr(1, 5) = "Adet"
     For i = 1 To mN
         outArr(i + 1, 1) = dMarka.Item(Norm(mMarka(i)))
         outArr(i + 1, 2) = IIf(mSebep(i) = "", "(Boþ)", mSebep(i))
         If mSureOK(i) Then outArr(i + 1, 3) = mSure(i)
         If mDokumOK(i) Then outArr(i + 1, 4) = mDokum(i)
+        outArr(i + 1, 5) = 1
     Next i
-    wsV.Range("A1").Resize(mN + 1, 4).Value = outArr
+    wsV.Range("A1").Resize(mN + 1, 5).Value = outArr
     wsV.Range("C2").Resize(mN, 1).NumberFormat = "[h]:mm:ss"
 
     Set pc = mWb.PivotCaches.Create(SourceType:=xlDatabase, _
-                                    SourceData:=wsV.Range("A1").Resize(mN + 1, 4))
+                                    SourceData:=wsV.Range("A1").Resize(mN + 1, 5))
     Set pt = pc.CreatePivotTable(TableDestination:=wsP.Range("A8"), TableName:="MarkaPerformans")
 
     With pt
         .ManualUpdate = True
         .PivotFields("Marka").Orientation = xlPageField
-        .PivotFields("Marka").EnableMultiplePageItems = False
+        .PivotFields("Marka").EnableMultiplePageItems = True
         .PivotFields("Deðiþim Sebebi").Orientation = xlPageField
         .PivotFields("Deðiþim Sebebi").EnableMultiplePageItems = True
 
@@ -71,12 +73,23 @@ Public Sub TekMarkaPerformans()
         df.NumberFormat = "[h]:mm:ss"
         Set df = .AddDataField(.PivotFields("Aldýðý Döküm Sayýsý"), "Ort. Aldýðý Döküm Sayýsý", xlAverage)
         df.NumberFormat = "0.00"
-        Set df = .AddDataField(.PivotFields("Marka"), "Kullaným Adedi", xlCount)
+        Set df = .AddDataField(.PivotFields("Adet"), "Kullaným Adedi", xlSum)
         df.NumberFormat = "0"
         .DataPivotField.Orientation = xlColumnField
         .ManualUpdate = False
-        .PivotFields("Marka").CurrentPage = marka
     End With
+
+    ' Sadece seçilen marka görünsün
+    On Error Resume Next
+    pt.ManualUpdate = True
+    For Each pi In pt.PivotFields("Marka").PivotItems
+        If Norm(pi.Name) = Norm(marka) Then pi.Visible = True
+    Next pi
+    For Each pi In pt.PivotFields("Marka").PivotItems
+        If Norm(pi.Name) <> Norm(marka) Then pi.Visible = False
+    Next pi
+    pt.ManualUpdate = False
+    On Error GoTo Hata
 
     With wsP
         .Range("A1").Value = "NOZUL PERFORMANSI"
