@@ -64,7 +64,7 @@ Public Sub NozulPivotOlustur()
         .ManualUpdate = True
         With .PivotFields("Marka")
             .Orientation = xlPageField
-            .EnableMultiplePageItems = True
+            .EnableMultiplePageItems = False
         End With
         With .PivotFields("Değişim Sebebi")
             .Orientation = xlPageField
@@ -75,9 +75,7 @@ Public Sub NozulPivotOlustur()
         df.NumberFormat = "[h]:mm:ss"
         Set df = .AddDataField(.PivotFields("Aldığı Döküm Sayısı"), "Ort. Aldığı Döküm Sayısı", xlAverage)
         df.NumberFormat = "0.00"
-        Set df = .AddDataField(.PivotFields("Aldığı Döküm Sayısı"), "Toplam Döküm Sayısı", xlSum)
-        df.NumberFormat = "0.0"
-        Set df = .AddDataField(.PivotFields("Marka"), "Değişim Adedi", xlCount)
+        Set df = .AddDataField(.PivotFields("Marka"), "Kullanım Adedi", xlCount)
         df.NumberFormat = "0"
 
         .DataPivotField.Orientation = xlColumnField
@@ -89,7 +87,7 @@ Public Sub NozulPivotOlustur()
         .Range("A1").Value = "NOZUL PİVOT"
         .Range("A1").Font.Bold = True
         .Range("A1").Font.Size = 14
-        .Range("A2").Value = "Üstteki 'Marka' ve 'Değişim Sebebi' filtrelerinden seçim yapın (çoklu seçim açık)."
+        .Range("A2").Value = "Üstteki 'Marka' filtresinden 1 marka seçin, 'Değişim Sebebi' filtresinden istediğiniz sebepleri seçin."
         .Range("A2").Font.Italic = True
         .Columns("A:F").ColumnWidth = 26
     End With
