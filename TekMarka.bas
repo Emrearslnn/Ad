@@ -63,7 +63,6 @@ Public Sub TekMarkaPerformans()
     Set pt = pc.CreatePivotTable(TableDestination:=wsP.Range("A8"), TableName:="MarkaPerformans")
 
     With pt
-        .ManualUpdate = True
         .PivotFields("Marka").Orientation = xlPageField
         .PivotFields("Marka").EnableMultiplePageItems = True
         .PivotFields("Deðiþim Sebebi").Orientation = xlPageField
@@ -76,19 +75,16 @@ Public Sub TekMarkaPerformans()
         Set df = .AddDataField(.PivotFields("Adet"), "Kullaným Adedi", xlSum)
         df.NumberFormat = "0"
         .DataPivotField.Orientation = xlColumnField
-        .ManualUpdate = False
     End With
 
     ' Sadece seçilen marka görünsün
     On Error Resume Next
-    pt.ManualUpdate = True
-    For Each pi In pt.PivotFields("Marka").PivotItems
-        If Norm(pi.Name) = Norm(marka) Then pi.Visible = True
-    Next pi
     For Each pi In pt.PivotFields("Marka").PivotItems
         If Norm(pi.Name) <> Norm(marka) Then pi.Visible = False
     Next pi
+    Err.Clear
     pt.ManualUpdate = False
+    pt.RefreshTable
     On Error GoTo Hata
 
     With wsP
