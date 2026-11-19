@@ -5,6 +5,7 @@ Attribute VB_Name = "TekMarkaAnaliz"
 '  1 marka sorar -> o markanýn pivotunu oluþturur:
 '  Ort. Aldýðý Süre, Ort. Aldýðý Döküm Sayýsý, Kullaným Adedi
 '  Filtreler: Marka (tek seçim) ve Deðiþim Sebebi
+'  TekMarkaRapor: Deðiþim sebebi + toplam süre içeren YENÝ Excel raporu
 '  NOZUL 2026 sayfasý açýkken çalýþtýrýn.
 '=====================================================================
 Option Explicit
@@ -103,6 +104,159 @@ Public Sub TekMarkaPerformans()
 Hata:
     Application.ScreenUpdating = True
     MsgBox "Hata: " & Err.Description, vbCritical
+End Sub
+
+'=====================================================================
+'  TekMarkaRapor : 1 marka sorar, YENÝ bir Excel dosyasý oluþturur.
+'  Deðiþim sebebine göre: Kullaným adedi, %, Toplam aldýðý süre,
+'  Ort. aldýðý süre, Toplam döküm, Ort. döküm. Sebep sütununda filtre var,
+'  TOPLAM satýrý filtreye göre otomatik deðiþir.
+'=====================================================================
+Public Sub TekMarkaRapor()
+    Dim dMarka As Object, dSeb As Object
+    Dim i As Long, k As String, marka As String, km As String
+    Dim nSeb As Long, si As Long, r As Long, adet As Long
+    Dim sebAd() As String, sAdet() As Long, sSumS() As Double, sSumD() As Double
+    Dim wbR As Workbook, ws As Worksheet, wsD As Worksheet
+    Dim rIlk As Long, rSon As Long, rT As Long
+    Dim det() As Variant, n As Long
+
+    If Not VeriYukle() Then Exit Sub
+
+    Set dMarka = CreateObject("Scripting.Dictionary")
+    For i = 1 To mN
+        k = Norm(mMarka(i))
+        If Not dMarka.Exists(k) Then dMarka.Add k, mMarka(i)
+    Next i
+    marka = MarkaSec(dMarka, "Raporu alýnacak marka", "")
+    If marka = "" Then Exit Sub
+    km = Norm(marka)
+
+    ReDim sebAd(1 To mN): ReDim sAdet(1 To mN)
+    ReDim sSumS(1 To mN): ReDim sSumD(1 To mN)
+    Set dSeb = CreateObject("Scripting.Dictionary")
+    For i = 1 To mN
+        If Norm(mMarka(i)) = km Then
+            adet = adet + 1
+            k = Norm(mSebep(i))
+            If k = "" Then k = "(BOS)"
+            If Not dSeb.Exists(k) Then
+                nSeb = nSeb + 1
+                dSeb.Add k, nSeb
+                If mSebep(i) = "" Then sebAd(nSeb) = "(Boþ)" Else sebAd(nSeb) = mSebep(i)
+            End If
+            si = dSeb.Item(k)
+            sAdet(si) = sAdet(si) + 1
+            If mSureOK(i) Then sSumS(si) = sSumS(si) + mSure(i)
+            If mDokumOK(i) Then sSumD(si) = sSumD(si) + mDokum(i)
+        End If
+    Next i
+    If adet = 0 Then MsgBox "Bu markaya ait kayýt yok.", vbExclamation: Exit Sub
+
+    On Error GoTo Hata
+    Application.ScreenUpdating = False
+    Set wbR = Workbooks.Add(xlWBATWorksheet)
+    Set ws = wbR.Worksheets(1)
+    ws.Name = "Rapor"
+    ActiveWindow.DisplayGridlines = False
+
+    ws.Range("A1").Value = "NOZUL PERFORMANS RAPORU - " & marka
+    ws.Range("A1").Font.Bold = True: ws.Range("A1").Font.Size = 15
+    ws.Range("A2").Value = "Kaynak: " & mWb.Name & "   |   " & Format(Now, "dd.mm.yyyy hh:nn") & _
+                           "   |   'Deðiþim Sebebi' baþlýðýndaki filtreden seçim yapabilirsiniz, TOPLAM satýrý filtreye göre deðiþir."
+    ws.Range("A2").Font.Italic = True: ws.Range("A2").Font.Color = RGB(89, 89, 89)
+
+    ws.Range("A4:G4").Value = Array("Deðiþim Sebebi", "Kullaným Adedi", "Oran %", _
+        "Toplam Aldýðý Süre", "Ort. Aldýðý Süre", "Toplam Döküm Sayýsý", "Ort. Döküm Sayýsý")
+    BaslikBicim ws.Range("A4:G4")
+
+    rIlk = 5
+    For si = 1 To nSeb
+        r = rIlk + si - 1
+        ws.Cells(r, 1).Value = sebAd(si)
+        ws.Cells(r, 2).Value = sAdet(si)
+        ws.Cells(r, 4).Value = sSumS(si)
+        ws.Cells(r, 6).Value = sSumD(si)
+    Next si
+    rSon = rIlk + nSeb - 1
+    If nSeb > 1 Then
+        ws.Range(ws.Cells(rIlk, 1), ws.Cells(rSon, 7)).Sort _
+            Key1:=ws.Cells(rIlk, 2), Order1:=xlDescending, Header:=xlNo
+    End If
+    For r = rIlk To rSon
+        ws.Cells(r, 3).Formula = "=IFERROR(B" & r & "/SUBTOTAL(109,$B$" & rIlk & ":$B$" & rSon & "),0)"
+        ws.Cells(r, 5).Formula = "=IF(B" & r & "=0,0,D" & r & "/B" & r & ")"
+        ws.Cells(r, 7).Formula = "=IF(B" & r & "=0,0,F" & r & "/B" & r & ")"
+    Next r
+
+    rT = rSon + 2
+    ws.Cells(rT, 1).Value = "TOPLAM"
+    ws.Cells(rT, 2).Formula = "=SUBTOTAL(109,B" & rIlk & ":B" & rSon & ")"
+    ws.Cells(rT, 3).Formula = "=IF(B" & rT & "=0,0,1)"
+    ws.Cells(rT, 4).Formula = "=SUBTOTAL(109,D" & rIlk & ":D" & rSon & ")"
+    ws.Cells(rT, 5).Formula = "=IF(B" & rT & "=0,0,D" & rT & "/B" & rT & ")"
+    ws.Cells(rT, 6).Formula = "=SUBTOTAL(109,F" & rIlk & ":F" & rSon & ")"
+    ws.Cells(rT, 7).Formula = "=IF(B" & rT & "=0,0,F" & rT & "/B" & rT & ")"
+    With ws.Range(ws.Cells(rT, 1), ws.Cells(rT, 7))
+        .Font.Bold = True
+        .Interior.Color = RGB(255, 242, 204)
+        .Borders(xlEdgeTop).LineStyle = xlContinuous
+        .Borders(xlEdgeBottom).LineStyle = xlContinuous
+    End With
+
+    ws.Range(ws.Cells(rIlk, 3), ws.Cells(rT, 3)).NumberFormat = "0.0%"
+    ws.Range(ws.Cells(rIlk, 4), ws.Cells(rT, 5)).NumberFormat = "[h]:mm:ss"
+    ws.Range(ws.Cells(rIlk, 6), ws.Cells(rT, 6)).NumberFormat = "0.0"
+    ws.Range(ws.Cells(rIlk, 7), ws.Cells(rT, 7)).NumberFormat = "0.00"
+    ws.Range(ws.Cells(rIlk, 2), ws.Cells(rT, 7)).HorizontalAlignment = xlCenter
+    With ws.Range(ws.Cells(4, 1), ws.Cells(rSon, 7)).Borders
+        .LineStyle = xlContinuous
+        .Color = RGB(191, 191, 191)
+    End With
+    ws.Range(ws.Cells(4, 1), ws.Cells(rSon, 7)).AutoFilter
+    ws.Columns("A").ColumnWidth = 28
+    ws.Columns("B:G").ColumnWidth = 18
+    ws.Rows(4).RowHeight = 32
+
+    ' ---- Detay sayfasý (markanýn tüm kayýtlarý) ----
+    Set wsD = wbR.Worksheets.Add(After:=ws)
+    wsD.Name = "Detay"
+    ReDim det(1 To adet + 1, 1 To 3)
+    det(1, 1) = "Deðiþim Sebebi": det(1, 2) = "Aldýðý Süre": det(1, 3) = "Aldýðý Döküm Sayýsý"
+    n = 1
+    For i = 1 To mN
+        If Norm(mMarka(i)) = km Then
+            n = n + 1
+            det(n, 1) = IIf(mSebep(i) = "", "(Boþ)", mSebep(i))
+            If mSureOK(i) Then det(n, 2) = mSure(i)
+            If mDokumOK(i) Then det(n, 3) = mDokum(i)
+        End If
+    Next i
+    wsD.Range("A1").Resize(n, 3).Value = det
+    wsD.Range("B2").Resize(n - 1, 1).NumberFormat = "[h]:mm:ss"
+    BaslikBicim wsD.Range("A1:C1")
+    wsD.Range("A1").Resize(n, 3).AutoFilter
+    wsD.Columns("A:C").ColumnWidth = 24
+
+    ws.Activate
+    ws.Range("A1").Select
+    Application.ScreenUpdating = True
+    MsgBox "Rapor yeni bir Excel dosyasýnda oluþturuldu. Kaydetmeyi unutmayýn.", vbInformation
+    Exit Sub
+Hata:
+    Application.ScreenUpdating = True
+    MsgBox "Hata: " & Err.Description, vbCritical
+End Sub
+
+Private Sub BaslikBicim(rng As Range)
+    With rng
+        .Font.Bold = True
+        .Font.Color = RGB(255, 255, 255)
+        .Interior.Color = RGB(31, 56, 100)
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .WrapText = True
+    End With
 End Sub
 
 '=====================================================================
